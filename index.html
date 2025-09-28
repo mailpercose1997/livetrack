@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tastiera Virtuale Gestuale - Righe Multiple</title>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #222; font-family: sans-serif; }
+        .container { 
+            position: relative; 
+            border: 5px solid #00aaff;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 170, 255, 0.5);
+        }
+        video {
+            transform: scaleX(-1); 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            display: block; 
+        }
+        canvas {
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            display: block; 
+        }
+        #output-text {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%); 
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-size: 1.5em;
+            min-width: 80%;
+            text-align: center;
+            border: 2px solid #00aaff;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output"></canvas>
+        <div id="output-text">Caricamento modelli... attendere.</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script> 
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script> 
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection"></script>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output');
+        const canvasCtx = canvasElement.getContext('2d');
+        const outputTextElement = document.getElementById('output-text');
+        
+        let handDetector;
+        let typedText = "";
+        
+        // --- RIGHE DI CARATTERI MULTIPLE (Modificate) ---
+        const CHARS_ROW_1 = "QWERTYUIOP"; 
+        const CHARS_ROW_2 = "ASDFGHJKL";  // Meno caratteri, il quadrante sarà più ampio
+        const CHARS_ROW_3 = "ZXCVBNM.,";
+        const CHARS_SYMBOLS = "1234567890";
+        
+        // VARIABILE DINAMICA PER LA RIGA ATTUALE
+        let currentChars = CHARS_ROW_1; 
+        
+        let selectedChar = currentChars[0]; 
+        let isRightPinchActive = false;
+        
+        // Variabile di sensibilità globale
+        const ROTATION_SENSITIVITY = 5; 
+
+        // Variabili per il Toggle Menu (Mano Sinistra)
+        let isMenuToggledOn = false; 
+        let isLeftPinchDetected = false; 
+        let lastLeftPinchToggleTime = 0;
+        const TOGGLE_DELAY = 300; 
+        
+        // Variabili per il cambio di riga (debounce)
+        let lastRowChangeTime = 0;
+        const ROW_CHANGE_DELAY = 500; // Ritardo per il cambio di riga
+        
+
+        let lastActionTime = 0;
+        const ACTION_DELAY = 500; 
+
+        // --- FUNZIONI DI BASE E UTILITÀ (Solo le modificate o cruciali) ---
+
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 'video': true });
+                videoElement.srcObject = stream;
+                return new Promise((resolve) => {
+                    videoElement.onloadedmetadata = () => {
+                        videoElement.play();
+                        canvasElement.width = videoElement.videoWidth;
+                        canvasElement.height = videoElement.videoHeight;
+                        const container = document.querySelector('.container');
+                        container.style.width = `${videoElement.videoWidth}px`;
+                        container.style.height = `${videoElement.videoHeight}px`;
+                        resolve(true);
+                    };
+                });
+            } catch (error) {
+                console.error("Errore nell'accesso alla webcam:", error);
+                alert("Impossibile accedere alla webcam. Assicurati di aver dato il permesso.");
+                return false;
+            }
+        }
+
+        async function loadDetectors() {
+            outputTextElement.textContent = "Caricamento modelli di tracciamento...";
+            
+            await tf.setBackend('webgl');
+            
+            const handModel = handPoseDetection.SupportedModels.MediaPipeHands;
+            handDetector = await handPoseDetection.createDetector(handModel, {
+                runtime: 'mediapipe',
+                modelType: 'full', 
+                solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands'
+            });
+            
+            outputTextElement.textContent = typedText || "Pinch Indice (Sinistra) per attivare. Pinch Medio/Anulare/Mignolo per cambiare riga.";
+            console.log("Modello HandPose caricato correttamente.");
+        }
+
+        function calculateDistance(p1, p2) {
+            return Math.sqrt(
+                Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+            );
+        }
+
+        function getPinchData(hand) {
+            const thumbTip = hand.keypoints[4]; 
+            const PINCH_THRESHOLD = 30; 
+            
+            // Includi anche il Mignolo (20)
+            const fingerTips = [
+                { name: 'Indice', tip: hand.keypoints[8] },
+                { name: 'Medio', tip: hand.keypoints[12] },
+                { name: 'Anulare', tip: hand.keypoints[16] },
+                { name: 'Mignolo', tip: hand.keypoints[20] } 
+            ];
+            const results = [];
+            fingerTips.forEach(finger => {
+                const distance = calculateDistance(thumbTip, finger.tip);
+                if (distance < PINCH_THRESHOLD){
+                    results.push({
+                        finger: finger.name,
+                        isPinching: true, 
+                        tipCoordinates: finger.tip
+                    });
+                }
+            });
+            return results;
+        }
+
+        function getHandRotationAngle(hand) {
+            const wrist = hand.keypoints[0];      
+            const palmCenter = hand.keypoints[8]; 
+            const deltaY = palmCenter.x - wrist.x;
+            const deltaX = palmCenter.y - wrist.y;
+            let angleDeg = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
+            if (angleDeg < 0) angleDeg += 360; 
+            return angleDeg;
+        }
+        
+        function updateText(char) {
+            if (char === 'DEL') {
+                typedText = typedText.slice(0, -1);
+            } else if (char === 'SPACE') {
+                typedText += ' ';
+            } else if (char.length === 1) {
+                typedText += char;
+            }
+            outputTextElement.textContent = typedText || "Pinch Indice (Sinistra) per attivare. Pinch Medio/Anulare/Mignolo per cambiare riga.";
+        }
+
+
+        // --- FUNZIONI DI DISEGNO ---
+        
+        // drawHands omessa (invariata)
+        function drawHands(hands) {
+            canvasCtx.fillStyle = '#00FF00'; 
+            canvasCtx.strokeStyle = '#00FF00'; 
+            canvasCtx.lineWidth = 2;
+            for (const hand of hands) {
+                const keypoints = hand.keypoints;
+                const fingerConnections = [
+                    [0, 1], [1, 2], [2, 3], [3, 4], 
+                    [0, 5], [5, 6], [6, 7], [7, 8], 
+                    [0, 9], [9, 10], [10, 11], [11, 12], 
+                    [0, 13], [13, 14], [14, 15], [15, 16], 
+                    [0, 17], [17, 18], [18, 19], [19, 20] 
+                ];
+                for (const [start, end] of fingerConnections) {
+                    canvasCtx.beginPath();
+                    canvasCtx.moveTo(keypoints[start].x, keypoints[start].y);
+                    canvasCtx.lineTo(keypoints[end].x, keypoints[end].y);
+                    canvasCtx.stroke();
+                }
+                for (const point of keypoints) {
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(point.x, point.y, 3, 0, 2 * Math.PI); 
+                    canvasCtx.fill();
+                }
+            }
+        }
+        
+        function drawCharMenu(center, radius, currentAngle) {
+            canvasCtx.save();
+            
+            canvasCtx.translate(center.x, center.y); 
+
+            // Disegna il cerchio centrale
+            canvasCtx.beginPath();
+            canvasCtx.arc(0, 0, radius * 0.4, 0, 2 * Math.PI); 
+            canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            canvasCtx.fill();
+
+            const CHAR_COUNT = currentChars.length;
+            const angleStep = 360 / CHAR_COUNT;
+
+            // Applicazione del fattore di sensibilità
+            let scaledAngle = currentAngle * ROTATION_SENSITIVITY;
+            
+            for (let i = 0; i < CHAR_COUNT; i++) {
+                const char = currentChars[i];
+                // L'angolo è basato sulla posizione i nel set di caratteri attuale
+                const charAngle = (i * angleStep - 90) * (Math.PI / 180); 
+                
+                const charX = radius * Math.cos(charAngle);
+                const charY = radius * Math.sin(charAngle);
+
+                // Normalizza l'angolo SCALATO per la selezione
+                let normalizedCurrentAngle = scaledAngle + 90; 
+                while (normalizedCurrentAngle > 360) normalizedCurrentAngle -= 360;
+                while (normalizedCurrentAngle < 0) normalizedCurrentAngle += 360;
+
+                const startAngle = i * angleStep;
+                const endAngle = (i + 1) * angleStep;
+
+                const isSelected = normalizedCurrentAngle >= startAngle && normalizedCurrentAngle < endAngle;
+
+                if (isSelected) {
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(charX, charY, 18, 0, 2 * Math.PI);
+                    canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#00aaff'; 
+                    canvasCtx.fill();
+                    selectedChar = char; // Imposta il carattere globale
+                }
+                
+                canvasCtx.fillStyle = isSelected ? '#000000' : '#FFFFFF';
+                canvasCtx.font = 'bold 20px sans-serif';
+                canvasCtx.textAlign = 'center';
+                canvasCtx.textBaseline = 'middle';
+                canvasCtx.fillText(char, charX, charY);
+            }
+            
+            canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#FFFFFF';
+            canvasCtx.font = 'bold 28px sans-serif';
+            // Mostra la prima lettera del set corrente al centro se non c'è selezione
+            canvasCtx.fillText(selectedChar, 0, 0); 
+
+            canvasCtx.restore(); 
+        }
+
+        // --- Loop di Tracciamento Principale ---
+        async function runDetection() {
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            const currentTime = Date.now();
+            isRightPinchActive = false; 
+
+            if (handDetector && videoElement.readyState >= 2) {
+                
+                // --- 1. PREPARAZIONE DEL CANVAS (Specchiatura) ---
+                canvasCtx.save();
+                canvasCtx.translate(canvasElement.width, 0);
+                canvasCtx.scale(-1, 1);
+                canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+
+                // --- 2. RILEVAMENTO MANI ---
+                const hands = await handDetector.estimateHands(videoElement, { flipHorizontal: false });
+                drawHands(hands); 
+                canvasCtx.restore(); 
+                
+                let menuCenter = null;
+                let menuAngle = 0;
+                let currentLeftPinchDetected = false; 
+                const MENU_RADIUS = 100;
+
+                for (const hand of hands) {
+                    const handLabel = hand.handedness; 
+                    const pinchData = getPinchData(hand); 
+
+                    // ----------------------------------------------------------------------
+                    // LOGICA MANO SINISTRA: TOGGLE E CAMBIO RIGA
+                    // ----------------------------------------------------------------------
+                    if (handLabel === 'Left') {
+                        const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+                        const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
+                        const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
+                        const mignoloPinch = pinchData.find(res => res.finger === 'Mignolo' && res.isPinching);
+
+                        // Calcola sempre la posizione e l'angolo se la mano è visibile
+                        menuCenter = {
+                            x: canvasElement.width - hand.keypoints[9].x, 
+                            y: hand.keypoints[9].y
+                        };
+                        menuAngle = getHandRotationAngle(hand);
+
+
+                        // --- 1. Gestione Toggle Menu (Indice) ---
+                        if (indexPinch) {
+                            currentLeftPinchDetected = true;
+                        }
+
+                        // --- 2. Gestione Cambio Riga (Medio, Anulare, Mignolo) ---
+                        if (currentTime - lastRowChangeTime > ROW_CHANGE_DELAY) {
+                            if (medioPinch) {
+                                currentChars = CHARS_ROW_2;
+                                lastRowChangeTime = currentTime;
+                                console.log("[SINISTRA] Riga 2 selezionata.");
+                            } else if (anularePinch) {
+                                currentChars = CHARS_ROW_3;
+                                lastRowChangeTime = currentTime;
+                                console.log("[SINISTRA] Riga 3 selezionata.");
+                            } else if (mignoloPinch) {
+                                currentChars = CHARS_SYMBOLS;
+                                lastRowChangeTime = currentTime;
+                                console.log("[SINISTRA] Simboli selezionati.");
+                            } else if (isMenuToggledOn && !indexPinch) {
+                                // Se il menu è attivo e non si fa pinch, resta su riga 1 (se non si è scelto un altro set)
+                                // Questo è un comportamento più stabile
+                            }
+                        }
+                    }
+
+                    // ----------------------------------------------------------------------
+                    // LOGICA MANO DESTRA: TASTI FUNZIONE E SELEZIONE
+                    // ----------------------------------------------------------------------
+                    else if (handLabel === 'Right') {
+                        const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+                        const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
+                        const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
+
+                        if (indexPinch) {
+                            isRightPinchActive = true; 
+                            
+                            // 1. Pinch Indice (Destra) + Menu Toggled On = SELEZIONA
+                            if (isMenuToggledOn && (currentTime - lastActionTime > ACTION_DELAY)) {
+                                updateText(selectedChar);
+                                lastActionTime = currentTime;
+                            }
+                        } 
+                        // 2. TASTI FUNZIONE
+                        else if (medioPinch && (currentTime - lastActionTime > ACTION_DELAY)) {
+                            updateText('SPACE');
+                            lastActionTime = currentTime;
+                        } else if (anularePinch && (currentTime - lastActionTime > ACTION_DELAY)) {
+                            updateText('DEL');
+                            lastActionTime = currentTime;
+                        }
+                    }
+                }
+
+                // --- GESTIONE DEL TOGGLE DEL MENU ---
+                if (currentLeftPinchDetected && !isLeftPinchDetected && (currentTime - lastLeftPinchToggleTime > TOGGLE_DELAY)) {
+                    isMenuToggledOn = !isMenuToggledOn;
+                    lastLeftPinchToggleTime = currentTime;
+                    
+                    // Se riattivi il menu, torna alla riga 1 per default
+                    if (isMenuToggledOn) {
+                         currentChars = CHARS_ROW_1; 
+                    } else {
+                         outputTextElement.textContent = typedText || "Menu disattivato. Pinch sinistra per riattivare.";
+                    }
+                    
+                    // Resetta selectedChar al primo del nuovo set
+                    selectedChar = currentChars[0];
+                }
+                isLeftPinchDetected = currentLeftPinchDetected;
+
+
+                // --- RENDERING FINALE DEL MENU ---
+                if (isMenuToggledOn && menuCenter) {
+                    drawCharMenu(menuCenter, MENU_RADIUS, menuAngle);
+                }
+            }
+
+            requestAnimationFrame(runDetection);
+        }
+
+        // --- Avvio Applicazione ---
+        async function main() {
+            try {
+                await tf.ready(); 
+                
+                const cameraReady = await setupCamera();
+                if (!cameraReady) return;
+                
+                await loadDetectors();
+                runDetection(); 
+            } catch (error) {
+                console.error("Errore fatale nell'applicazione:", error);
+                outputTextElement.textContent = `ERRORE: ${error.message}. Controlla la console.`;
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
