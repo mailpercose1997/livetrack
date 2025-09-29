@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Tastiera Virtuale Gestuale - Righe Multiple</title>
+    <title>Tastiera Virtuale Gestuale - Versione Iniziale (A due mani)</title>
     <style>
         body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #222; font-family: sans-serif; }
         .container { 
             position: relative; 
-            border: 5px solid #00aaff;
+            border: 5px solid #ff5733;
             border-radius: 8px;
-            box-shadow: 0 0 20px rgba(0, 170, 255, 0.5);
+            box-shadow: 0 0 20px rgba(255, 87, 51, 0.5);
         }
         video {
             transform: scaleX(-1); 
@@ -35,7 +35,7 @@
             font-size: 1.5em;
             min-width: 80%;
             text-align: center;
-            border: 2px solid #00aaff;
+            border: 2px solid #ff5733;
             z-index: 10;
         }
     </style>
@@ -65,39 +65,27 @@
         let handDetector;
         let typedText = "";
         
-        // --- RIGHE DI CARATTERI MULTIPLE (Modificate) ---
+        // --- RIGHE DI CARATTERI MULTIPLE ---
         const CHARS_ROW_1 = "QWERTYUIOP"; 
-        const CHARS_ROW_2 = "ASDFGHJKL";  // Meno caratteri, il quadrante sarà più ampio
+        const CHARS_ROW_2 = "ASDFGHJKL";
         const CHARS_ROW_3 = "ZXCVBNM.,";
         const CHARS_SYMBOLS = "1234567890";
-        
-        // VARIABILE DINAMICA PER LA RIGA ATTUALE
         let currentChars = CHARS_ROW_1; 
         
-        let selectedChar = currentChars[0]; 
+        let selectedChar = CHARS_ROW_1[0]; 
+        
+        const ROTATION_SENSITIVITY = 0.8; 
         let isRightPinchActive = false;
         
-        // Variabile di sensibilità globale
-        const ROTATION_SENSITIVITY = 5; 
-
-        // Variabili per il Toggle Menu (Mano Sinistra)
-        let isMenuToggledOn = false; 
-        let isLeftPinchDetected = false; 
-        let lastLeftPinchToggleTime = 0;
-        const TOGGLE_DELAY = 300; 
-        
-        // Variabili per il cambio di riga (debounce)
-        let lastRowChangeTime = 0;
-        const ROW_CHANGE_DELAY = 500; // Ritardo per il cambio di riga
-        
-
         let lastActionTime = 0;
         const ACTION_DELAY = 500; 
+        let lastRowChangeTime = 0;
+        const ROW_CHANGE_DELAY = 500; 
 
-        // --- FUNZIONI DI BASE E UTILITÀ (Solo le modificate o cruciali) ---
-
+        // --- FUNZIONI UTILITY ---
+        
         async function setupCamera() {
-            try {
+             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 'video': true });
                 videoElement.srcObject = stream;
                 return new Promise((resolve) => {
@@ -120,18 +108,14 @@
 
         async function loadDetectors() {
             outputTextElement.textContent = "Caricamento modelli di tracciamento...";
-            
             await tf.setBackend('webgl');
-            
             const handModel = handPoseDetection.SupportedModels.MediaPipeHands;
             handDetector = await handPoseDetection.createDetector(handModel, {
                 runtime: 'mediapipe',
                 modelType: 'full', 
                 solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands'
             });
-            
-            outputTextElement.textContent = typedText || "Pinch Indice (Sinistra) per attivare. Pinch Medio/Anulare/Mignolo per cambiare riga.";
-            console.log("Modello HandPose caricato correttamente.");
+            outputTextElement.textContent = typedText || "Gesto mano sinistra per Menu Radiale. Pinch Pollice-Indice (destra) per digitare.";
         }
 
         function calculateDistance(p1, p2) {
@@ -139,12 +123,11 @@
                 Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
             );
         }
-
+        
         function getPinchData(hand) {
             const thumbTip = hand.keypoints[4]; 
             const PINCH_THRESHOLD = 30; 
             
-            // Includi anche il Mignolo (20)
             const fingerTips = [
                 { name: 'Indice', tip: hand.keypoints[8] },
                 { name: 'Medio', tip: hand.keypoints[12] },
@@ -167,14 +150,14 @@
 
         function getHandRotationAngle(hand) {
             const wrist = hand.keypoints[0];      
-            const palmCenter = hand.keypoints[8]; 
-            const deltaY = palmCenter.x - wrist.x;
-            const deltaX = palmCenter.y - wrist.y;
+            const palmCenter = hand.keypoints[9]; 
+            const deltaX = palmCenter.x - wrist.x;
+            const deltaY = palmCenter.y - wrist.y;
             let angleDeg = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
             if (angleDeg < 0) angleDeg += 360; 
             return angleDeg;
         }
-        
+
         function updateText(char) {
             if (char === 'DEL') {
                 typedText = typedText.slice(0, -1);
@@ -183,13 +166,11 @@
             } else if (char.length === 1) {
                 typedText += char;
             }
-            outputTextElement.textContent = typedText || "Pinch Indice (Sinistra) per attivare. Pinch Medio/Anulare/Mignolo per cambiare riga.";
+            outputTextElement.textContent = typedText || "Gesto mano sinistra per Menu Radiale. Pinch Pollice-Indice (destra) per digitare.";
         }
-
-
+        
         // --- FUNZIONI DI DISEGNO ---
         
-        // drawHands omessa (invariata)
         function drawHands(hands) {
             canvasCtx.fillStyle = '#00FF00'; 
             canvasCtx.strokeStyle = '#00FF00'; 
@@ -217,12 +198,11 @@
             }
         }
         
+        // Disegno del menu di digitazione (quadrante rotante)
         function drawCharMenu(center, radius, currentAngle) {
             canvasCtx.save();
-            
             canvasCtx.translate(center.x, center.y); 
 
-            // Disegna il cerchio centrale
             canvasCtx.beginPath();
             canvasCtx.arc(0, 0, radius * 0.4, 0, 2 * Math.PI); 
             canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
@@ -236,7 +216,6 @@
             
             for (let i = 0; i < CHAR_COUNT; i++) {
                 const char = currentChars[i];
-                // L'angolo è basato sulla posizione i nel set di caratteri attuale
                 const charAngle = (i * angleStep - 90) * (Math.PI / 180); 
                 
                 const charX = radius * Math.cos(charAngle);
@@ -255,7 +234,7 @@
                 if (isSelected) {
                     canvasCtx.beginPath();
                     canvasCtx.arc(charX, charY, 18, 0, 2 * Math.PI);
-                    canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#00aaff'; 
+                    canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#ff5733'; 
                     canvasCtx.fill();
                     selectedChar = char; // Imposta il carattere globale
                 }
@@ -269,7 +248,6 @@
             
             canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#FFFFFF';
             canvasCtx.font = 'bold 28px sans-serif';
-            // Mostra la prima lettera del set corrente al centro se non c'è selezione
             canvasCtx.fillText(selectedChar, 0, 0); 
 
             canvasCtx.restore(); 
@@ -280,123 +258,103 @@
             canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
             
             const currentTime = Date.now();
-            isRightPinchActive = false; 
-
+            isRightPinchActive = false;
+            
             if (handDetector && videoElement.readyState >= 2) {
                 
-                // --- 1. PREPARAZIONE DEL CANVAS (Specchiatura) ---
                 canvasCtx.save();
                 canvasCtx.translate(canvasElement.width, 0);
                 canvasCtx.scale(-1, 1);
                 canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
 
-                // --- 2. RILEVAMENTO MANI ---
                 const hands = await handDetector.estimateHands(videoElement, { flipHorizontal: false });
                 drawHands(hands); 
                 canvasCtx.restore(); 
                 
-                let menuCenter = null;
-                let menuAngle = 0;
-                let currentLeftPinchDetected = false; 
-                const MENU_RADIUS = 100;
+                let rotationForMenu = 0;
+                let leftHandFound = false;
 
                 for (const hand of hands) {
                     const handLabel = hand.handedness; 
-                    const pinchData = getPinchData(hand); 
-
-                    // ----------------------------------------------------------------------
-                    // LOGICA MANO SINISTRA: TOGGLE E CAMBIO RIGA
-                    // ----------------------------------------------------------------------
+                    const pinchData = getPinchData(hand);
+                    const handRotation = getHandRotationAngle(hand);
+                    
+                    // MANO SINISTRA: Rotazione del Menu e Cambio Riga
                     if (handLabel === 'Left') {
-                        const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
-                        const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
-                        const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
-                        const mignoloPinch = pinchData.find(res => res.finger === 'Mignolo' && res.isPinching);
-
-                        // Calcola sempre la posizione e l'angolo se la mano è visibile
-                        menuCenter = {
-                            x: canvasElement.width - hand.keypoints[9].x, 
-                            y: hand.keypoints[9].y
-                        };
-                        menuAngle = getHandRotationAngle(hand);
-
-
-                        // --- 1. Gestione Toggle Menu (Indice) ---
-                        if (indexPinch) {
-                            currentLeftPinchDetected = true;
-                        }
-
-                        // --- 2. Gestione Cambio Riga (Medio, Anulare, Mignolo) ---
+                        leftHandFound = true;
+                        rotationForMenu = handRotation; // Rotazione mano sinistra per il quadrante
+                        
                         if (currentTime - lastRowChangeTime > ROW_CHANGE_DELAY) {
-                            if (medioPinch) {
-                                currentChars = CHARS_ROW_2;
+                            const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+                            const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
+                            const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
+                            const mignoloPinch = pinchData.find(res => res.finger === 'Mignolo' && res.isPinching);
+
+                            if (indexPinch) currentChars = CHARS_ROW_1;
+                            else if (medioPinch) currentChars = CHARS_ROW_2;
+                            else if (anularePinch) currentChars = CHARS_ROW_3;
+                            else if (mignoloPinch) currentChars = CHARS_SYMBOLS;
+                            
+                            if (indexPinch || medioPinch || anularePinch || mignoloPinch) {
                                 lastRowChangeTime = currentTime;
-                                console.log("[SINISTRA] Riga 2 selezionata.");
-                            } else if (anularePinch) {
-                                currentChars = CHARS_ROW_3;
-                                lastRowChangeTime = currentTime;
-                                console.log("[SINISTRA] Riga 3 selezionata.");
-                            } else if (mignoloPinch) {
-                                currentChars = CHARS_SYMBOLS;
-                                lastRowChangeTime = currentTime;
-                                console.log("[SINISTRA] Simboli selezionati.");
-                            } else if (isMenuToggledOn && !indexPinch) {
-                                // Se il menu è attivo e non si fa pinch, resta su riga 1 (se non si è scelto un altro set)
-                                // Questo è un comportamento più stabile
+                                selectedChar = currentChars[0];
                             }
                         }
                     }
-
-                    // ----------------------------------------------------------------------
-                    // LOGICA MANO DESTRA: TASTI FUNZIONE E SELEZIONE
-                    // ----------------------------------------------------------------------
+                    
+                    // MANO DESTRA: Azioni (Digitazione, Spazio, Delete)
                     else if (handLabel === 'Right') {
                         const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
                         const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
                         const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
 
+                        if (currentTime - lastActionTime > ACTION_DELAY) {
+                             if (indexPinch) {
+                                 // Pinch Indice (Destra) = SELEZIONA CARATTERE
+                                 updateText(selectedChar);
+                                 isRightPinchActive = true;
+                                 lastActionTime = currentTime;
+                             } else if (medioPinch) {
+                                 // Pinch Medio (Destra) = SPACE
+                                 updateText('SPACE');
+                                 lastActionTime = currentTime;
+                             } else if (anularePinch) {
+                                 // Pinch Anulare (Destra) = DELETE
+                                 updateText('DEL');
+                                 lastActionTime = currentTime;
+                             }
+                        }
+                        
+                        // Per il rendering, verifica solo il pinch Indice
                         if (indexPinch) {
-                            isRightPinchActive = true; 
-                            
-                            // 1. Pinch Indice (Destra) + Menu Toggled On = SELEZIONA
-                            if (isMenuToggledOn && (currentTime - lastActionTime > ACTION_DELAY)) {
-                                updateText(selectedChar);
-                                lastActionTime = currentTime;
-                            }
-                        } 
-                        // 2. TASTI FUNZIONE
-                        else if (medioPinch && (currentTime - lastActionTime > ACTION_DELAY)) {
-                            updateText('SPACE');
-                            lastActionTime = currentTime;
-                        } else if (anularePinch && (currentTime - lastActionTime > ACTION_DELAY)) {
-                            updateText('DEL');
-                            lastActionTime = currentTime;
+                             isRightPinchActive = true; 
                         }
                     }
                 }
-
-                // --- GESTIONE DEL TOGGLE DEL MENU ---
-                if (currentLeftPinchDetected && !isLeftPinchDetected && (currentTime - lastLeftPinchToggleTime > TOGGLE_DELAY)) {
-                    isMenuToggledOn = !isMenuToggledOn;
-                    lastLeftPinchToggleTime = currentTime;
-                    
-                    // Se riattivi il menu, torna alla riga 1 per default
-                    if (isMenuToggledOn) {
-                         currentChars = CHARS_ROW_1; 
-                    } else {
-                         outputTextElement.textContent = typedText || "Menu disattivato. Pinch sinistra per riattivare.";
+                
+                // Se la mano sinistra non è stata trovata, usa la rotazione della mano destra
+                if (!leftHandFound) {
+                    const rightHand = hands.find(h => h.handedness === 'Right');
+                    if (rightHand) {
+                        rotationForMenu = getHandRotationAngle(rightHand);
                     }
-                    
-                    // Resetta selectedChar al primo del nuovo set
-                    selectedChar = currentChars[0];
                 }
-                isLeftPinchDetected = currentLeftPinchDetected;
 
-
-                // --- RENDERING FINALE DEL MENU ---
-                if (isMenuToggledOn && menuCenter) {
-                    drawCharMenu(menuCenter, MENU_RADIUS, menuAngle);
+                // RENDERING
+                const leftHand = hands.find(h => h.handedness === 'Left');
+                let menuCenter;
+                
+                // Centra il menu sulla mano sinistra se trovata, altrimenti al centro dello schermo
+                if (leftHand) {
+                    menuCenter = {
+                        x: canvasElement.width - leftHand.keypoints[9].x, 
+                        y: leftHand.keypoints[9].y
+                    };
+                } else {
+                    menuCenter = { x: canvasElement.width / 2, y: canvasElement.height / 2 };
                 }
+                
+                drawCharMenu(menuCenter, 100, rotationForMenu);
             }
 
             requestAnimationFrame(runDetection);
@@ -406,10 +364,8 @@
         async function main() {
             try {
                 await tf.ready(); 
-                
                 const cameraReady = await setupCamera();
                 if (!cameraReady) return;
-                
                 await loadDetectors();
                 runDetection(); 
             } catch (error) {
