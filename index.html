@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Tastiera Virtuale Gestuale - Modalità Master con Abbassamento</title>
+    <title>Tastiera Virtuale Gestuale - Esagono Stile Fisso</title>
     <style>
         body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #222; font-family: sans-serif; }
         .container { 
@@ -70,7 +70,7 @@
         const TYPING_MODE = 'TYPING_MODE';
         const DRAWING_MODE = 'DRAWING_MODE'; 
         
-        let currentMode = HEXAGON_MENU; 
+        let currentMode = TYPING_MODE; // Iniziamo in Modalità Digitazione per semplicità, ma l'Esagono deve essere selezionabile.
         
         // --- CONFIGURAZIONI DIGITAZIONE ---
         const CHARS_ROW_1 = "QWERTYUIOP"; 
@@ -84,30 +84,42 @@
         let lastRowChangeTime = 0;
         const ROW_CHANGE_DELAY = 500; 
         
-        // --- CONFIGURAZIONI ESAGONO ---
-        // Stato: TRUE quando le dita sono alzate (per la navigazione)
+        // --- CONFIGURAZIONI ESAGONO (MODALITÀ) ---
         let isHexagonGestureActive = false; 
-        // Stato: FALSE quando le dita sono abbassate, ma la selezione DEVE avvenire.
         let wasHexagonGestureActive = false; 
 
         const HEXAGON_FUNCTIONS = [
-            { name: "DIGITAZIONE", action: () => { currentMode = TYPING_MODE; currentChars = CHARS_ROW_1; selectedChar = CHARS_ROW_1[0]; } },
+            { name: "DIGITAZIONE", action: () => { currentMode = TYPING_MODE; } },
             { name: "DISEGNA (FUTURO)", action: () => { currentMode = DRAWING_MODE; alert("Modalità Disegno non implementata."); } },
-            { name: "SPAZIO", action: () => { updateText('SPACE'); currentMode = HEXAGON_MENU; } }, // Torna all'esagono dopo l'azione
-            { name: "CANCELLA", action: () => { updateText('DEL'); currentMode = HEXAGON_MENU; } }, // Torna all'esagono dopo l'azione
-            { name: "IMPOSTAZIONI (FUTURO)", action: () => { currentMode = HEXAGON_MENU; } },
-            { name: "ESCI", action: () => { currentMode = HEXAGON_MENU; } } 
+            // Le funzioni di sistema ora cambiano ANCHE la riga del quadrante se siamo in modalità digitazione
+            { name: "SPAZIO", action: () => { updateText('SPACE'); } },
+            { name: "CANCELLA", action: () => { updateText('DEL'); } },
+            { name: "RIGA SUCCESSIVA", action: () => { cycleTypingRow(); } },
+            { name: "RIGA PRECEDENTE", action: () => { cycleTypingRow(true); } } 
         ];
         
+        // Variabili per la selezione radiale, sempre attiva quando il gesto Esagono è in corso
         let hexSelectorAngle = 0;
-        // Manteniamo traccia della selezione corrente per attivarla al rilascio
         let currentSelectedHexIndex = 0; 
         
         let lastActionTime = 0;
         const ACTION_DELAY = 500; 
-
-        // --- FUNZIONI UTILITY ---
         
+        // --- UTILITY ---
+        function cycleTypingRow(reverse = false) {
+             const rows = [CHARS_ROW_1, CHARS_ROW_2, CHARS_ROW_3, CHARS_SYMBOLS];
+             let currentIndex = rows.findIndex(row => row === currentChars);
+             
+             if (reverse) {
+                 currentIndex = (currentIndex - 1 + rows.length) % rows.length;
+             } else {
+                 currentIndex = (currentIndex + 1) % rows.length;
+             }
+             
+             currentChars = rows[currentIndex];
+             selectedChar = currentChars[0];
+        }
+
         async function setupCamera() {
              try {
                 const stream = await navigator.mediaDevices.getUserMedia({ 'video': true });
@@ -139,7 +151,7 @@
                 modelType: 'full', 
                 solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands'
             });
-            outputTextElement.textContent = typedText || `Modalità Attiva: ${currentMode}. Alza Pollice-Indice-Medio (destra) per l'Esagono.`;
+            outputTextElement.textContent = typedText || `Modalità Attiva: ${currentMode}. Alza Pollice-Indice-Medio (destra) per Menu Radiale.`;
         }
 
         function calculateDistance(p1, p2) {
@@ -173,26 +185,20 @@
         }
 
         function isFingerUp(hand, fingerBaseIndex) {
-            // Indice=5, Medio=9, Anulare=13, Mignolo=17
-            // Pollice (4) si controlla rispetto al polso (0) o all'Indice (5)
-            // Per il pollice usiamo un check più semplice (punta sopra la base)
             const fingerTip = hand.keypoints[fingerBaseIndex + 3];
             const fingerBase = hand.keypoints[fingerBaseIndex];
             
-            // Per Indice, Medio, Anulare, Mignolo: punta più alta della base della falange
-            if (fingerBaseIndex !== 1) { // 1 non è una base di dito
-                return fingerTip.y < fingerBase.y; 
+            if (fingerBaseIndex === 1) { // Pollice (base 1)
+                return fingerTip.y < hand.keypoints[5].y;
             }
-            return fingerTip.y < hand.keypoints[5].y; // Pollice: punta sopra la base dell'indice
+            return fingerTip.y < fingerBase.y; 
         }
         
-        // Controlla se il gesto Pollice-Indice-Medio è ATTIVO (dita alzate)
         function isHexagonGestureActiveCheck(hand) {
             const isIndexUp = isFingerUp(hand, 5); 
             const isMiddleUp = isFingerUp(hand, 9);
-            const isThumbUp = isFingerUp(hand, 1); // Riferimento al Pollice (Punta 4, base 1)
+            const isThumbUp = isFingerUp(hand, 1); 
             
-            // Anulare e mignolo devono essere giù per evitare falsi positivi
             const isRingDown = !isFingerUp(hand, 13); 
             const isPinkyDown = !isFingerUp(hand, 17);
             
@@ -218,7 +224,7 @@
             } else if (char.length === 1) {
                 typedText += char;
             }
-            outputTextElement.textContent = typedText || `Modalità Attiva: ${currentMode}. Alza Pollice-Indice-Medio (destra) per l'Esagono.`;
+            outputTextElement.textContent = typedText || `Modalità Attiva: ${currentMode}. Alza Pollice-Indice-Medio (destra) per Menu Radiale.`;
         }
         
         // --- FUNZIONI DI DISEGNO ---
@@ -255,14 +261,22 @@
             canvasCtx.save();
             canvasCtx.translate(center.x, center.y); 
 
-            canvasCtx.beginPath();
-            canvasCtx.arc(0, 0, radius * 0.4, 0, 2 * Math.PI); 
+            // Il menu di digitazione è leggermente spostato per non sovrapporsi all'Esagono
+            canvasCtx.translate(0, radius * 1.5); 
+            
+            // Disegna il background della riga corrente
             canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-            canvasCtx.fill();
+            canvasCtx.fillRect(-radius, -radius * 0.4, radius * 2, radius * 0.8);
+            canvasCtx.fillStyle = '#FFFFFF';
+            canvasCtx.font = '16px sans-serif';
+            canvasCtx.textAlign = 'center';
+            canvasCtx.textBaseline = 'middle';
+            canvasCtx.fillText(`Riga Attiva: ${currentChars.slice(0, 5)}...`, 0, -radius * 0.2);
 
+
+            // Disegno del quadrante rotante
             const CHAR_COUNT = currentChars.length;
             const angleStep = 360 / CHAR_COUNT;
-
             let scaledAngle = currentAngle * ROTATION_SENSITIVITY;
             
             for (let i = 0; i < CHAR_COUNT; i++) {
@@ -298,12 +312,12 @@
             
             canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#FFFFFF';
             canvasCtx.font = 'bold 28px sans-serif';
-            canvasCtx.fillText(selectedChar, 0, 0); 
+            canvasCtx.fillText(`DIGITA: ${selectedChar}`, 0, radius * 0.2); 
 
             canvasCtx.restore(); 
         }
 
-        // --- FUNZIONE: DISEGNO ESAGONO ---
+        // --- FUNZIONE: DISEGNO ESAGONO (STILE FISSO) ---
         function drawHexagonSelector(center, radius, currentAngle) {
             canvasCtx.save();
             canvasCtx.translate(center.x, center.y); 
@@ -311,6 +325,7 @@
             const sideCount = HEXAGON_FUNCTIONS.length; 
             const angleStep = 360 / sideCount;
 
+            // Calcola la selezione
             let normalizedCurrentAngle = currentAngle + 90; 
             while (normalizedCurrentAngle > 360) normalizedCurrentAngle -= 360;
             while (normalizedCurrentAngle < 0) normalizedCurrentAngle += 360;
@@ -327,6 +342,7 @@
             canvasCtx.textAlign = 'center';
             canvasCtx.textBaseline = 'middle';
 
+            // Disegna l'Esagono
             canvasCtx.beginPath();
             for (let i = 0; i < sideCount; i++) {
                 const angleRad = (i * angleStep - 90) * (Math.PI / 180);
@@ -343,24 +359,31 @@
                 const isCurrent = i === currentSelectedIndex;
                 
                 canvasCtx.fillStyle = isCurrent ? '#FF00FF' : '#FFFFFF';
+                
+                // Disegna il testo della funzione
                 canvasCtx.fillText(HEXAGON_FUNCTIONS[i].name, textX, textY);
+
+                // Evidenzia la punta selezionata
+                if (isCurrent) {
+                    canvasCtx.beginPath();
+                    canvasCtx.arc(x, y, 10, 0, 2 * Math.PI);
+                    canvasCtx.fillStyle = '#FF00FF'; 
+                    canvasCtx.fill();
+                }
             }
             canvasCtx.closePath();
             canvasCtx.stroke();
             
-            // Disegna il centro come indicatore di selezione
-            canvasCtx.beginPath();
-            canvasCtx.arc(0, 0, 8, 0, 2 * Math.PI); 
-            canvasCtx.fillStyle = 'rgba(255, 255, 255, 1)';
-            canvasCtx.fill();
-
-            // Evidenziazione dinamica al centro per indicare che è selezionato
+            // Icona di stato centrale
             canvasCtx.beginPath();
             canvasCtx.arc(0, 0, radius * 0.3, 0, 2 * Math.PI); 
-            canvasCtx.strokeStyle = '#FF00FF'; 
-            canvasCtx.lineWidth = 2;
-            canvasCtx.stroke();
-            
+            canvasCtx.fillStyle = `rgba(0, 0, 0, 0.8)`; 
+            canvasCtx.fill();
+
+            canvasCtx.fillStyle = '#00aaff';
+            canvasCtx.font = 'bold 20px sans-serif';
+            canvasCtx.fillText(currentMode.replace('_MODE', ''), 0, 0);
+
             canvasCtx.restore(); 
         }
 
@@ -383,64 +406,71 @@
                 drawHands(hands); 
                 canvasCtx.restore(); 
                 
-                let rotationForMenu = 0;
-                let rightHandIsVisibleAndActive = false;
+                let rotationForHexagon = 0; // Rotazione per l'Esagono (Destra)
+                let rotationForCharMenu = 0; // Rotazione per il Quadrante (Sinistra)
                 
                 let isCurrentHexagonGestureActive = false;
+                let rightHandFound = false;
+                let leftHandFound = false;
 
                 for (const hand of hands) {
                     const handLabel = hand.handedness; 
                     const pinchData = getPinchData(hand);
                     const handRotation = getHandRotationAngle(hand);
                     
-                    // 1. Rilevamento Gesto Esagono (Mano Destra)
+                    // 1. Rilevamento Gesto Esagono (Mano Destra) e Input
                     if (handLabel === 'Right') {
+                        rightHandFound = true;
+                        
+                        // GESTO: Alzare 3 dita (Attiva la selezione Esagono)
                         if (isHexagonGestureActiveCheck(hand)) {
                             isCurrentHexagonGestureActive = true;
-                            rotationForMenu = handRotation; // Rotazione mano destra per l'Esagono
-                            rightHandIsVisibleAndActive = true;
-                            continue; // Ignora gli altri input della destra se il gesto Esagono è attivo
+                            rotationForHexagon = handRotation; 
+                        }
+
+                        // INPUT: Pinch Pollice-Indice (Digitazione)
+                        const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+                        if (currentMode === TYPING_MODE && !isCurrentHexagonGestureActive && indexPinch) {
+                             isRightPinchActive = true; 
+                             if (currentTime - lastActionTime > ACTION_DELAY) {
+                                 updateText(selectedChar);
+                                 lastActionTime = currentTime;
+                             }
                         }
                     }
-                    
-                    // 2. Logica Specifica per la Modalità Attiva (Solo se Esagono NON Attivo)
-                    if (!isHexagonGestureActive && currentMode === TYPING_MODE) {
-                        
-                        // MANO SINISTRA: Rotazione e Cambio Riga
-                        if (handLabel === 'Left') {
-                            rotationForMenu = handRotation; // Rotazione mano sinistra per il quadrante
-                            
-                            if (currentTime - lastRowChangeTime > ROW_CHANGE_DELAY) {
-                                const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
-                                const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
-                                const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
-                                const mignoloPinch = pinchData.find(res => res.finger === 'Mignolo' && res.isPinching);
 
-                                if (indexPinch) currentChars = CHARS_ROW_1;
-                                else if (medioPinch) currentChars = CHARS_ROW_2;
-                                else if (anularePinch) currentChars = CHARS_ROW_3;
-                                else if (mignoloPinch) currentChars = CHARS_SYMBOLS;
-                                
-                                if (indexPinch || medioPinch || anularePinch || mignoloPinch) {
-                                    lastRowChangeTime = currentTime;
-                                    selectedChar = currentChars[0];
-                                }
-                            }
-                        }
-                        
-                        // MANO DESTRA: Digitazione (Pinch Indice)
-                        else if (handLabel === 'Right') {
-                            rightHandIsVisibleAndActive = true;
-                            const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+                    // 2. Logica Mano Sinistra: Rotazione e Cambio Riga (Solo in TYPING_MODE)
+                    else if (handLabel === 'Left') {
+                         leftHandFound = true;
+                         if (currentMode === TYPING_MODE) {
+                             rotationForCharMenu = handRotation; 
+                             
+                             // Cambio Riga (Pinch Pollice-X)
+                             if (currentTime - lastRowChangeTime > ROW_CHANGE_DELAY) {
+                                 const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+                                 const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
+                                 const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
+                                 const mignoloPinch = pinchData.find(res => res.finger === 'Mignolo' && res.isPinching);
 
-                            if (indexPinch) {
-                                isRightPinchActive = true; 
-                                if (currentTime - lastActionTime > ACTION_DELAY) {
-                                    updateText(selectedChar);
-                                    lastActionTime = currentTime;
-                                }
-                            }
-                        }
+                                 if (indexPinch) currentChars = CHARS_ROW_1;
+                                 else if (medioPinch) currentChars = CHARS_ROW_2;
+                                 else if (anularePinch) currentChars = CHARS_ROW_3;
+                                 else if (mignoloPinch) currentChars = CHARS_SYMBOLS;
+                                 
+                                 if (indexPinch || medioPinch || anularePinch || mignoloPinch) {
+                                     lastRowChangeTime = currentTime;
+                                     selectedChar = currentChars[0];
+                                 }
+                             }
+                         }
+                    }
+                }
+                
+                // Se la mano sinistra non è stata trovata, la rotazione del quadrante è gestita dalla destra
+                if (currentMode === TYPING_MODE && !leftHandFound) {
+                    const rightHand = hands.find(h => h.handedness === 'Right');
+                    if (rightHand) {
+                        rotationForCharMenu = getHandRotationAngle(rightHand);
                     }
                 }
 
@@ -450,29 +480,24 @@
                 if (wasHexagonGestureActive && !isCurrentHexagonGestureActive) {
                     // Esegui l'azione selezionata
                     HEXAGON_FUNCTIONS[currentSelectedHexIndex].action();
-                    // Assicurati che il menu sia nascosto/disattivato
-                    isHexagonGestureActive = false;
                     
+                    // Se l'azione ha modificato la modalità, aggiorna il testo di output
+                    outputTextElement.textContent = typedText || `Modalità Attiva: ${currentMode}. Alza Pollice-Indice-Medio (destra) per Menu Radiale.`;
                 }
 
                 // Aggiorna lo stato per il frame successivo
                 wasHexagonGestureActive = isHexagonGestureActive;
                 isHexagonGestureActive = isCurrentHexagonGestureActive;
                 
-                // Se siamo in modalità Esagono e la mano destra non è visibile, non c'è rotazione.
-                if (currentMode === HEXAGON_MENU && !rightHandIsVisibleAndActive) {
-                    isHexagonGestureActive = false;
-                }
-                
                 // --- 4. RENDERING FINALE ---
                 const center = { x: canvasElement.width / 2, y: canvasElement.height / 2 };
 
-                if (isHexagonGestureActive || currentMode === HEXAGON_MENU) {
-                    // Disegna l'Esagono se il gesto è attivo O se siamo in modalità Esagono (per mostrare le opzioni dopo la selezione)
-                    drawHexagonSelector(center, 150, rotationForMenu);
-                } else if (currentMode === TYPING_MODE) {
-                    // Disegna il menu di Digitazione (usa la rotazione della mano sinistra o della destra se l'altra non c'è)
-                    drawCharMenu(center, 100, rotationForMenu);
+                // L'Esagono è sempre disegnato per lo stile, e la selezione è attiva se il gesto è attivo.
+                drawHexagonSelector(center, 150, rotationForHexagon);
+
+                if (currentMode === TYPING_MODE) {
+                    // Disegna il menu di Digitazione (quadrante)
+                    drawCharMenu(center, 100, rotationForCharMenu);
                 } 
 
             }
