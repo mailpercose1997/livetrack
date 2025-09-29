@@ -90,15 +90,13 @@
         const HEXAGON_FUNCTIONS = [
             // Funzione principale: Attiva/Disattiva la modalità di digitazione (mano sinistra)
             { name: "ATTIVA DIGITAZIONE", action: () => { isMenuToggledOn = true; currentChars = CHARS_ROW_1; } },
-            { name: "DISATTIVA DIGITAZIONE", action: () => { isMenuToggledOn = false; } },
+            { name: "DISEGNA", action: () => { isMenuToggledOn = false; } },
             
-            // Funzioni di sistema
-            { name: "SPACE", action: () => { updateText('SPACE'); } },
-            { name: "DELETE", action: () => { updateText('DEL'); } },
-            
-            // Funzioni Placeholder (Esempi futuri)
-            { name: "MAIUSC", action: () => { console.log("MAIUSC Attivo!"); } },
-            { name: "COMANDO X", action: () => { console.log("Comando X eseguito!"); } }
+            { name: "ALTRO", action: () => { updateText('SPACE'); } },
+            { name: "ALTRO", action: () => { updateText('DEL'); } },
+
+            { name: "ALTRO", action: () => { console.log("MAIUSC Attivo!"); } },
+            { name: "ALTRO", action: () => { console.log("Comando X eseguito!"); } }
         ];
         
         let hexSelectorAngle = 0;
