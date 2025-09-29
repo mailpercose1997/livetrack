@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tastiera Virtuale Gestuale - Avvio Gestuale</title>
+    <style>
+        body { margin: 0; display: flex; justify-content: center; align-items: center; min-height: 100vh; background: #222; font-family: sans-serif; }
+        .container { 
+            position: relative; 
+            border: 5px solid #00aaff;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 170, 255, 0.5);
+            /* Dimensioni iniziali standard */
+            width: 640px; 
+            height: 480px;
+        }
+        video {
+            transform: scaleX(-1); 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            display: block; 
+            /* Rendi il video invisibile finché il canvas non è pronto, se necessario, ma lo lasciamo per coerenza */
+        }
+        canvas {
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            display: block; 
+        }
+        #output-text {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%); 
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 5px;
+            font-size: 1.5em;
+            min-width: 80%;
+            text-align: center;
+            border: 2px solid #00aaff;
+            z-index: 10;
+        }
+        
+        /* Area di Attivazione Gestuale */
+        #activation-target {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 20px 40px;
+            font-size: 1.8em;
+            color: white;
+            background-color: rgba(0, 170, 255, 0.8);
+            border: 4px solid white;
+            border-radius: 10px;
+            cursor: default; 
+            z-index: 20; 
+            transition: background-color 0.3s, border-color 0.3s;
+            text-align: center;
+            line-height: 1.2;
+            pointer-events: none; /* Importante: permette al canvas di disegnare anche se il div è sopra */
+        }
+        #activation-target.active {
+             /* Feedback visivo durante il pinch */
+            background-color: #FF6347; 
+            border-color: #FF6347;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="activation-target">
+            Esegui il **Pinch Indice**<br>sulla mano sinistra per attivare
+        </div> 
+        
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="output"></canvas>
+        <div id="output-text">Caricamento librerie...</div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script> 
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script> 
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection"></script>
+    
+    <script>
+        // La variabile globale per indicare che i modelli sono pronti è stata rimossa,
+        // useremo `handDetector` come indicatore.
+
+        function initializeVirtualKeyboard() {
+            // --- Variabili DOM e Costanti ---
+            const videoElement = document.getElementById('webcam');
+            const canvasElement = document.getElementById('output');
+            const canvasCtx = canvasElement.getContext('2d');
+            const outputTextElement = document.getElementById('output-text');
+            const activationTarget = document.getElementById('activation-target');
+            
+            let handDetector = null;
+            let typedText = "";
+            
+            // Righe di Caratteri
+            const CHARS_ROW_1 = "QWERTYUIOP"; 
+            const CHARS_ROW_2 = "ASDFGHJKL"; 
+            const CHARS_ROW_3 = "ZXCVBNM.,";
+            const CHARS_SYMBOLS = "1234567890";
+            
+            // Stato del Menu
+            let currentChars = CHARS_ROW_1; 
+            let selectedChar = CHARS_ROW_1[0]; 
+            let isRightPinchActive = false;
+            let isMenuToggledOn = false; // Inizialmente FALSE: è la modalità "pre-attivazione"
+            
+            // Toggle Menu (Mano Sinistra)
+            let isLeftPinchDetected = false; 
+            let lastLeftPinchToggleTime = 0;
+            const TOGGLE_DELAY = 300; 
+            
+            // Debounce e Costanti
+            let lastRowChangeTime = 0;
+            const ROW_CHANGE_DELAY = 500; 
+            let lastActionTime = 0;
+            const ACTION_DELAY = 500; 
+            const ROTATION_SENSITIVITY = 5; 
+            const PINCH_THRESHOLD = 30; 
+            const MENU_RADIUS = 100;
+
+            // ----------------------------------------------------------------------
+            // FUNZIONI DI UTILITÀ (Invariate)
+            // ----------------------------------------------------------------------
+            
+            function calculateDistance(p1, p2) {
+                return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+            }
+
+            function getPinchData(hand) {
+                const thumbTip = hand.keypoints[4]; 
+                const fingerTips = [
+                    { name: 'Indice', tip: hand.keypoints[8] },
+                    { name: 'Medio', tip: hand.keypoints[12] },
+                    { name: 'Anulare', tip: hand.keypoints[16] },
+                    { name: 'Mignolo', tip: hand.keypoints[20] } 
+                ];
+                const results = [];
+                fingerTips.forEach(finger => {
+                    const distance = calculateDistance(thumbTip, finger.tip);
+                    if (distance < PINCH_THRESHOLD){
+                        results.push({
+                            finger: finger.name,
+                            isPinching: true, 
+                            tipCoordinates: finger.tip
+                        });
+                    }
+                });
+                return results;
+            }
+
+            function getHandRotationAngle(hand) {
+                const wrist = hand.keypoints[0];      
+                const palmCenter = hand.keypoints[9]; 
+                const deltaY = palmCenter.x - wrist.x;
+                const deltaX = palmCenter.y - wrist.y;
+                let angleDeg = Math.atan2(deltaY, deltaX) * (180 / Math.PI);
+                if (angleDeg < 0) angleDeg += 360; 
+                return angleDeg;
+            }
+            
+            function updateText(char) {
+                if (char === 'DEL') {
+                    typedText = typedText.slice(0, -1);
+                } else if (char === 'SPACE') {
+                    typedText += ' ';
+                } else if (char.length === 1) {
+                    typedText += char;
+                }
+                outputTextElement.textContent = typedText || "Pinch Indice (Sinistra) per attivare. Pinch Medio/Anulare/Mignolo per cambiare riga.";
+            }
+
+            // --- Draw Functions (Invariate) ---
+            function drawHands(hands) {
+                canvasCtx.fillStyle = '#00FF00'; 
+                canvasCtx.strokeStyle = '#00FF00'; 
+                canvasCtx.lineWidth = 2;
+                for (const hand of hands) {
+                    const keypoints = hand.keypoints;
+                    const fingerConnections = [
+                        [0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], 
+                        [0, 9], [9, 10], [10, 11], [11, 12], [0, 13], [13, 14], [14, 15], [15, 16], 
+                        [0, 17], [17, 18], [18, 19], [19, 20] 
+                    ];
+                    for (const [start, end] of fingerConnections) {
+                        canvasCtx.beginPath();
+                        canvasCtx.moveTo(keypoints[start].x, keypoints[start].y);
+                        canvasCtx.lineTo(keypoints[end].x, keypoints[end].y);
+                        canvasCtx.stroke();
+                    }
+                    for (const point of keypoints) {
+                        canvasCtx.beginPath();
+                        canvasCtx.arc(point.x, point.y, 3, 0, 2 * Math.PI); 
+                        canvasCtx.fill();
+                    }
+                }
+            }
+            
+            function drawCharMenu(center, radius, currentAngle) {
+                canvasCtx.save();
+                canvasCtx.translate(center.x, center.y); 
+
+                canvasCtx.beginPath();
+                canvasCtx.arc(0, 0, radius * 0.4, 0, 2 * Math.PI); 
+                canvasCtx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                canvasCtx.fill();
+
+                const CHAR_COUNT = currentChars.length;
+                const angleStep = 360 / CHAR_COUNT;
+
+                let scaledAngle = currentAngle * ROTATION_SENSITIVITY;
+                
+                for (let i = 0; i < CHAR_COUNT; i++) {
+                    const char = currentChars[i];
+                    const charAngle = (i * angleStep - 90) * (Math.PI / 180); 
+                    
+                    const charX = radius * Math.cos(charAngle);
+                    const charY = radius * Math.sin(charAngle);
+
+                    let normalizedCurrentAngle = scaledAngle + 90; 
+                    while (normalizedCurrentAngle > 360) normalizedCurrentAngle -= 360;
+                    while (normalizedCurrentAngle < 0) normalizedCurrentAngle += 360;
+
+                    const startAngle = i * angleStep;
+                    const endAngle = (i + 1) * angleStep;
+
+                    const isSelected = normalizedCurrentAngle >= startAngle && normalizedCurrentAngle < endAngle;
+
+                    if (isSelected) {
+                        canvasCtx.beginPath();
+                        canvasCtx.arc(charX, charY, 18, 0, 2 * Math.PI);
+                        canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#00aaff'; 
+                        canvasCtx.fill();
+                        selectedChar = char;
+                    }
+                    
+                    canvasCtx.fillStyle = isSelected ? '#000000' : '#FFFFFF';
+                    canvasCtx.font = 'bold 20px sans-serif';
+                    canvasCtx.textAlign = 'center';
+                    canvasCtx.textBaseline = 'middle';
+                    canvasCtx.fillText(char, charX, charY);
+                }
+                
+                canvasCtx.fillStyle = isRightPinchActive ? '#FF6347' : '#FFFFFF';
+                canvasCtx.font = 'bold 28px sans-serif';
+                canvasCtx.fillText(selectedChar, 0, 0); 
+
+                canvasCtx.restore(); 
+            }
+
+            async function setupCamera() {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ 'video': true });
+                    videoElement.srcObject = stream;
+                    return new Promise((resolve) => {
+                        videoElement.onloadedmetadata = () => {
+                            videoElement.play();
+                            canvasElement.width = videoElement.videoWidth;
+                            canvasElement.height = videoElement.videoHeight;
+                            const container = document.querySelector('.container');
+                            container.style.width = `${videoElement.videoWidth}px`;
+                            container.style.height = `${videoElement.videoHeight}px`;
+                            resolve(true);
+                        };
+                    });
+                } catch (error) {
+                    console.error("Errore nell'accesso alla webcam:", error);
+                    alert("Impossibile accedere alla webcam. Assicurati di aver dato il permesso.");
+                    return false;
+                }
+            }
+
+            async function loadDetectors() {
+                await tf.setBackend('webgl');
+                const handModel = handPoseDetection.SupportedModels.MediaPipeHands;
+                handDetector = await handPoseDetection.createDetector(handModel, {
+                    runtime: 'mediapipe',
+                    modelType: 'full', 
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands'
+                });
+                outputTextElement.textContent = "Modelli caricati. Esegui il Pinch Indice (Mano Sinistra) sul riquadro blu per attivare.";
+            }
+
+            // ----------------------------------------------------------------------
+            // FUNZIONE AGGIUSTATA PER IL CONTROLLO DI ATTIVAZIONE GESTUALE
+            // ----------------------------------------------------------------------
+            function isInsideActivationTarget(point) {
+                // Se il target è nascosto, non è necessario controllare
+                if (activationTarget.style.display === 'none') return false; 
+
+                // Otteniamo le dimensioni e la posizione del target DIV
+                const targetRect = activationTarget.getBoundingClientRect();
+                
+                // Otteniamo le dimensioni del container (video/canvas)
+                const containerRect = document.querySelector('.container').getBoundingClientRect();
+                
+                // Calcoliamo il fattore di scala per mappare le coordinate del canvas (0-W, 0-H)
+                // alle coordinate reali sullo schermo (per via del CSS che lo centra e ridimensiona)
+                const scaleX = containerRect.width / canvasElement.width;
+                const scaleY = containerRect.height / canvasElement.height;
+                
+                // La mano è specchiata (transform: scaleX(-1)), ma il rilevatore *non* è specchiato (flipHorizontal: false).
+                // Dobbiamo mappare il punto X del canvas come se fosse specchiato per allinearlo alla posizione del DIV.
+                // La coordinata X del punto è misurata da sinistra a destra (0 a W).
+                // Poiché il DIV è posizionato normalmente, e il video è specchiato,
+                // dobbiamo convertire la coordinata X del rilevatore (che è "non specchiata") 
+                // in una coordinata relativa allo schermo specchiato.
+
+                const mappedX = canvasElement.width - point.x; // Specchia la coordinata X del rilevatore
+
+                // Convertiamo la coordinata specchiata nel sistema di coordinate assoluto dello schermo
+                const pointXAbsolute = mappedX * scaleX + containerRect.left;
+                const pointYAbsolute = point.y * scaleY + containerRect.top; // Y è invariata
+
+                // Controllo finale
+                return pointXAbsolute >= targetRect.left && 
+                       pointXAbsolute <= targetRect.right &&
+                       pointYAbsolute >= targetRect.top &&
+                       pointYAbsolute <= targetRect.bottom;
+            }
+
+
+            // ----------------------------------------------------------------------
+            // LOOP PRINCIPALE DI RILEVAMENTO
+            // ----------------------------------------------------------------------
+            async function runDetection() {
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+                const currentTime = Date.now();
+                isRightPinchActive = false; 
+                let isLeftIndexPinchingOverTarget = false; // Nuovo flag per l'attivazione
+                let menuCenter = null;
+                let menuAngle = 0;
+                let currentLeftPinchDetected = false; 
+
+                if (handDetector && videoElement.readyState >= 2) {
+                    
+                    canvasCtx.save();
+                    canvasCtx.translate(canvasElement.width, 0);
+                    canvasCtx.scale(-1, 1);
+                    canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+                    const hands = await handDetector.estimateHands(videoElement, { flipHorizontal: false });
+                    drawHands(hands); 
+                    canvasCtx.restore(); 
+
+                    for (const hand of hands) {
+                        const handLabel = hand.handedness; 
+                        const pinchData = getPinchData(hand); 
+                        const indexPinch = pinchData.find(res => res.finger === 'Indice' && res.isPinching);
+
+                        // --- GESTIONE PRE-ATTIVAZIONE ---
+                        if (!isMenuToggledOn && handLabel === 'Left' && indexPinch) {
+                            
+                            if (isInsideActivationTarget(indexPinch.tipCoordinates)) {
+                                isLeftIndexPinchingOverTarget = true;
+                                activationTarget.classList.add('active');
+                                
+                                // *** ATTIVAZIONE EFFETTIVA ***
+                                isMenuToggledOn = true; 
+                                activationTarget.style.display = 'none';
+                                outputTextElement.textContent = "Tastiera Attivata. Pinch Indice (Sinistra) per disattivare/riattivare.";
+                                break; // Usciamo dal loop delle mani per procedere al rendering
+                            }
+                        } 
+                        
+                        // --- GESTIONE TASTIERA ATTIVA ---
+                        if (isMenuToggledOn) {
+                             if (handLabel === 'Left') {
+                                const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
+                                const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
+                                const mignoloPinch = pinchData.find(res => res.finger === 'Mignolo' && res.isPinching);
+
+                                menuCenter = {
+                                    x: canvasElement.width - hand.keypoints[9].x, 
+                                    y: hand.keypoints[9].y
+                                };
+                                menuAngle = getHandRotationAngle(hand);
+
+                                // 1. Gestione Toggle Menu (Indice)
+                                if (indexPinch) {
+                                    currentLeftPinchDetected = true;
+                                }
+
+                                // 2. Gestione Cambio Riga 
+                                if (currentTime - lastRowChangeTime > ROW_CHANGE_DELAY) {
+                                    if (medioPinch) {
+                                        currentChars = CHARS_ROW_2;
+                                        lastRowChangeTime = currentTime;
+                                    } else if (anularePinch) {
+                                        currentChars = CHARS_ROW_3;
+                                        lastRowChangeTime = currentTime;
+                                    } else if (mignoloPinch) {
+                                        currentChars = CHARS_SYMBOLS;
+                                        lastRowChangeTime = currentTime;
+                                    }
+                                    if ((medioPinch || anularePinch || mignoloPinch)) {
+                                        selectedChar = currentChars[0];
+                                    }
+                                }
+                            }
+                            else if (handLabel === 'Right') {
+                                const medioPinch = pinchData.find(res => res.finger === 'Medio' && res.isPinching);
+                                const anularePinch = pinchData.find(res => res.finger === 'Anulare' && res.isPinching);
+
+                                if (indexPinch) {
+                                    isRightPinchActive = true; 
+                                    
+                                    if (currentTime - lastActionTime > ACTION_DELAY) {
+                                        updateText(selectedChar);
+                                        lastActionTime = currentTime;
+                                    }
+                                } 
+                                else if (medioPinch && (currentTime - lastActionTime > ACTION_DELAY)) {
+                                    updateText('SPACE');
+                                    lastActionTime = currentTime;
+                                } else if (anularePinch && (currentTime - lastActionTime > ACTION_DELAY)) {
+                                    updateText('DEL');
+                                    lastActionTime = currentTime;
+                                }
+                            }
+                        }
+                    }
+
+                    // GESTIONE DEL TOGGLE (Solo se attiva)
+                    if (isMenuToggledOn) {
+                        if (currentLeftPinchDetected && !isLeftPinchDetected && (currentTime - lastLeftPinchToggleTime > TOGGLE_DELAY)) {
+                            isMenuToggledOn = !isMenuToggledOn;
+                            lastLeftPinchToggleTime = currentTime;
+                            
+                            if (isMenuToggledOn) {
+                                currentChars = CHARS_ROW_1; 
+                            } else {
+                                outputTextElement.textContent = typedText || "Menu disattivato. Pinch sinistra per riattivare.";
+                            }
+                            selectedChar = currentChars[0];
+                        }
+                        isLeftPinchDetected = currentLeftPinchDetected;
+                    }
+                    
+
+                    // RENDERING FINALE DEL MENU
+                    if (isMenuToggledOn && menuCenter) {
+                        drawCharMenu(menuCenter, MENU_RADIUS, menuAngle);
+                    }
+                    
+                    // Rimuove il feedback visivo se il pinch non è più attivo E la tastiera non è ancora stata attivata
+                    if (!isMenuToggledOn && !isLeftIndexPinchingOverTarget) {
+                        activationTarget.classList.remove('active');
+                    }
+                }
+
+                requestAnimationFrame(runDetection);
+            }
+
+            // ----------------------------------------------------------------------
+            // FUNZIONE DI AVVIO
+            // ----------------------------------------------------------------------
+
+            async function main() {
+                try {
+                    await tf.ready(); 
+                    const cameraReady = await setupCamera();
+                    if (!cameraReady) return;
+                    
+                    await loadDetectors();
+                    runDetection(); // Avvia il loop di pre-attivazione
+                } catch (error) {
+                    console.error("Errore fatale nell'applicazione:", error);
+                    outputTextElement.textContent = `ERRORE: ${error.message}. Controlla la console.`;
+                }
+            }
+
+            main();
+        }
+
+        document.addEventListener('DOMContentLoaded', initializeVirtualKeyboard);
+    </script>
+</body>
+</html>
